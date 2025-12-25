@@ -1,0 +1,557 @@
+---
+title: "5205 final project - group 1"
+output:
+  html_document: default
+  pdf_document: default
+date: "2025-05-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data cleaning & description
+
+```{r}
+library(readxl)
+df <- read_excel("/Users/song/Desktop/Prices.xlsx", sheet = "Daily")
+df1<-df[5:12050,]
+colnames(df1) <- c("snapped_at", "price")
+df1$snapped_at <- as.Date(df1$snapped_at, format="%Y-%m-%d")  
+df1 <- df1[df1$snapped_at > as.Date("2013-12-26"), ]
+df1$price <- round(as.numeric(df1$price), 2)
+library(readr)
+write_csv(df1, "output.csv")
+#Read data
+gold_data <- read.csv('/Users/song/Desktop/output.csv')
+btc_price <- read.csv('/Users/song/Desktop/btc-usd-max.csv')
+str(btc_price)
+str(gold_data)
+# Date format
+library(lubridate)
+btc_price$snapped_at <- as.Date(ymd_hms(btc_price$snapped_at))
+
+#Filter dates
+library(dplyr)
+btc_price <- btc_price %>% filter(snapped_at >= as.Date("2013-12-27"))
+
+#Rename
+colnames(btc_price) <- c("date", "btc_price","btc_market_cap", "btc_volume")
+colnames(gold_data) <- c("date", "gold_price")
+
+#join data
+merged_data <- merge(btc_price, gold_data, by = "date", all = FALSE)
+
+#plot
+library(ggplot2)
+ggplot(merged_data, aes(x = date, y = btc_price)) +
+  geom_line(color = "blue", size = 1) +
+  labs(title = "Bitcoin Price Trend",
+       x = "Date",
+       y = "Bitcoin Price (USD)") +
+  theme_minimal()
+
+ggplot(merged_data, aes(x = date, y = gold_price)) +
+  geom_line(color = "gold", size = 1) +
+  labs(title = "Gold Price Trend",
+       x = "Date",
+       y = "Gold Price (USD)") +
+  theme_minimal()
+
+
+#Save as CSV
+write.csv(merged_data, "merged_data.csv", row.names = FALSE)
+write.csv(gold_data, "gold_data.csv", row.names = FALSE)
+write.csv(btc_price, "btc_price.csv", row.names = FALSE)
+
+data<-read.csv("/Users/song/Desktop/merged_data.csv")
+
+#Calculate daily plan and rolling volatility
+library(dplyr)
+library(zoo)
+
+data<- data %>%
+  arrange(date) %>%
+  mutate(
+    btc_return = (btc_price - lag(btc_price)) / lag(btc_price),
+    btc_volatility = rollapply(btc_return, width = 30, FUN = sd, fill = NA, align = "right")
+  )
+
+
+#Descriptive statistics
+library(e1071)
+library(dplyr)
+
+data <- data %>%
+  mutate(
+    btc_price = as.numeric(btc_price),
+    gold_price = as.numeric(gold_price),
+    btc_return = as.numeric(btc_return)
+  )
+
+get_stats <- function(x) {
+  x <- na.omit(x)
+  c(
+    Mean     = mean(x),
+    Median   = median(x),
+    StdDev   = sd(x),
+    Skewness = skewness(x),
+    Kurtosis = kurtosis(x)
+  )
+}
+
+stats_table <- data.frame(
+  Variable = c("Bitcoin Price", "Gold Price", "Bitcoin Return"),
+  rbind(
+    get_stats(data$btc_price),
+    get_stats(data$gold_price),
+    get_stats(data$btc_return)
+  )
+)
+
+print(stats_table, digits = 4)
+
+#Draw price, return, volatility time series graphs
+#Draw market capitalization and trading volume trend graphs
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+data$date <- as.Date(data$date)
+data$gold_price <- as.numeric(data$gold_price)
+
+plot_data <- data %>%
+  select(date, btc_price, btc_return, btc_volatility,
+         btc_market_cap, btc_volume, gold_price) %>%
+  pivot_longer(cols = -date, names_to = "variable", values_to = "value")
+
+
+plot_data$variable <- factor(plot_data$variable,
+                             levels = c("btc_price", "btc_return", "btc_volatility",
+                                        "btc_market_cap", "btc_volume", "gold_price"),
+                             labels = c("Price (USD)", "Return", "Rolling Volatility (30d)",
+                                        "Market Cap (Billion USD)", "Trading Volume (Billion USD)", "Gold Price (USD)")
+)
+
+ggplot(plot_data, aes(x = date, y = value)) +
+  geom_line(color = "steelblue") +
+  facet_wrap(~ variable, scales = "free_y", ncol = 1) +  
+  labs(title = "Bitcoin Metrics and Gold Price Over Time", x = "Date", y = NULL) +
+  theme_minimal(base_size = 14)
+
+# Test the return distribution
+data$btc_return <- as.numeric(data$btc_return)
+
+shapiro_test_result <- shapiro.test(na.omit(data$btc_return))
+
+print(shapiro_test_result)
+```
+
+
+#Cluster analysis
+
+##Data loading and pre-processing
+
+```{r}
+Btgold<-read.csv("/Users/song/Desktop/data_cleaned (2).csv")
+library(tidyverse)
+library(ggplot2)
+library(car)    
+library(factoextra) 
+library(ggfortify) 
+
+
+data<-Btgold %>%
+  mutate(
+    date = as.Date(date),
+    btc_return = c(NA, diff(btc_price) / lag(btc_price)[-1]), # Calculate the rate of return
+    gold_return = c(NA, diff(gold_price) / lag(gold_price)[-1]),
+    is_crisis = ifelse(date >= as.Date("2020-01-01") & date <= as.Date("2020-06-30"), 1, 0) # Calculate the rate of return to define the crisis period
+  ) %>%
+  drop_na() # Remove missing values
+```
+
+##T-test or Mann-Whitney test (difference in returns)
+```{r}
+# Shapiro-Wilk
+shapiro.test(data$btc_return[data$is_crisis == 1]) # Crisis period BTC
+shapiro.test(data$gold_return[data$is_crisis == 1]) # Crisis period Gold
+```
+The non-normality test assumes that returns do not follow a normal distribution, so the following can only be done using a non-parametric rank test (Wilcoxon rank sum test, also known as the Mann-Whitney U test) to compare the median distribution of daily returns in the “Crisis Period” with that in the “Non-Crisis Period”. The median distribution of daily returns under “crisis period” and “non-crisis period” are compared to the median distribution of daily returns under “crisis period” and “non-crisis period”.
+**The p's for both are much larger than the commonly used significance level (e.g., 0.05), so we are unable to reject the statement that “the median return is the same in crisis and non-crisis periods” (the null hypothesis) **
+
+```{r}
+# BTC Yield Test
+wilcox.test(btc_return ~ is_crisis, data = data)  # BTC
+# Gold Yield Test
+wilcox.test(gold_return ~ is_crisis, data = data) # Gold
+```
+
+The BTC Yield Test Levene's Test, which tests whether the variance of two samples (in this case “crisis” vs “non-crisis”) is equal, i.e. whether there is a difference in the “stability” of bitcoin volatility between different time periods. The “stability” of bitcoin's volatility over time.
+
+```{r}
+leveneTest(btc_volatility ~ as.factor(is_crisis), data = data)
+```
+
+Since p≈0.00006<0.001, we reject the null hypothesis, indicating that there is a significant difference in the variance of daily volatility of Bitcoin during crisis and non-crisis periods. This implies that volatility is higher (higher variance) during crisis periods, while it is relatively smooth during non-crisis periods.
+
+```{r}
+# Visualization of price trends during COVID-19
+ggplot(data, aes(x = date)) +
+  geom_line(aes(y = btc_price, color = "BTC"), linewidth = 1) +
+  geom_line(aes(y = gold_price * 100, color = "Gold (Scaled)"), linewidth = 1) + 
+  geom_rect(aes(xmin = as.Date("2020-01-01"), xmax = as.Date("2020-06-30")),
+    ymin = -Inf, ymax = Inf,fill = "red",, alpha = 0.2) +
+  scale_color_manual(values = c("BTC" = "orange", "Gold (Scaled)" = "gold")) +
+  labs(title = "BTC vs Gold During COVID-19 Crisis", x = "Date", y = "Price") +
+  theme_minimal()
+```
+
+
+```{r}
+# Select and standardize features
+features <- data %>%
+  select(btc_return, btc_volatility, btc_volume, gold_return,rolling_vol) %>%
+  scale() # standardization
+
+# Determining the optimal number of clusters (elbow rule)
+fviz_nbclust(features, kmeans, method = "wss") + 
+  geom_vline(xintercept = 3, linetype = 2) # Suggested choice of inflection point (e.g., k = 2 or 3)
+set.seed(42)
+kmeans_result <- kmeans(features, centers = 2) # assuming k=2
+data$cluster <- as.factor(kmeans_result$cluster)
+```
+```{r}
+pca_result <- prcomp(features, scale. = TRUE)
+autoplot(pca_result, data = data, colour = 'cluster', 
+         loadings = TRUE, loadings.label = TRUE, frame = TRUE) +
+  labs(title = "PCA Visualization of BTC vs Gold Clusters")
+```
+The characteristics of return are completely different from the characteristics of volatility, displayed in different principal component dimensions, where the first principal component is mainly composed of volatility, volume also mainly reflects the first principal component; the second principal component is mainly composed of return
+ 
+
+```{r}
+pca_result$rotation
+```
+
+#Association Rule Mining
+
+```{r}
+# Load libraries
+library(dplyr)
+library(arules)
+library(arulesViz)
+
+# Read processed data
+data <- read.csv('/Users/song/Desktop/data_cleaned (2).csv')
+
+# Add the label “during the crisis” (COVID: 2020-03-01 to 2020-06-30)
+data$date <- as.Date(data$date)
+data$crisis_flag <- ifelse(data$date >= as.Date("2020-03-01") & data$date <= as.Date("2020-06-30"), "Crisis", "NonCrisis")
+```
+
+Construct categorized tags (for basket)
+
+```{r}
+# Categorized tag construction (based on BTC price, volume, volatility, gold yield)
+data$btc_trend <- cut(data$btc_return,
+                      breaks = c(-Inf, -0.01, 0.01, Inf),
+                      labels = c("btc_Down", "btc_Stable", "btc_Up"),
+                      right = TRUE)
+
+vol_quants <- quantile(data$btc_volume, probs = c(0.33, 0.66), na.rm = TRUE)
+data$btc_vol_group <- cut(data$btc_volume,
+                          breaks = c(-Inf, vol_quants[1], vol_quants[2], Inf),
+                          labels = c("LowVolume", "MidVolume", "HighVolume"))
+
+vol_threshold <- median(data$rolling_vol, na.rm = TRUE)
+data$btc_volatility_group <- ifelse(data$rolling_vol > vol_threshold, "HighVolatility", "LowVolatility")
+
+# Add gold behavior
+data$gold_trend <- cut(data$gold_log_return,
+                       breaks = c(-Inf, -0.005, 0.005, Inf),
+                       labels = c("gold_Down", "gold_Stable", "gold_Up"))
+```
+
+##Extract data during crisis & convert to transactions
+
+```{r}
+# Extract subset of crisis
+crisis_data <- subset(data, crisis_flag == "Crisis")
+
+# Merge tags into basket styles
+basket_df <- crisis_data %>%
+  select(btc_trend, btc_vol_group, btc_volatility_group, gold_trend) %>%
+  apply(1, function(x) as.character(na.omit(x)))
+
+txn_list <- as(split(basket_df, seq(nrow(crisis_data))), "transactions")
+
+summary(txn_list)
+```
+
+##Generate rules (with minlen and appearance constraints)
+
+```{r}
+library(arules)
+
+# minlen = 2
+rules <- apriori(txn_list,
+                 parameter = list(supp = 0.05, conf = 0.6, minlen = 2))
+
+# RHS-btc_Down
+rules_down <- apriori(txn_list,
+                      parameter = list(supp = 0.05, conf = 0.6, minlen = 2),
+                      appearance = list(rhs = "btc_Down"))
+
+# minlen = 3
+rules_long <- apriori(txn_list,
+                      parameter = list(supp = 0.04, conf = 0.6, minlen = 3))
+
+rules_df <- as(rules, "data.frame")
+rules_long_df <- as(rules_long, "data.frame")
+if (length(rules_down) > 0) {
+  rules_down_df <- as(rules_down, "data.frame")
+}
+```
+
+##Rule Sorting and Visualization
+
+```{r}
+library(arulesViz)
+
+# Sorting rules
+rules_sorted <- sort(rules, by = "lift", decreasing = TRUE)
+rules_long_sorted <- sort(rules_long, by = "lift", decreasing = TRUE)
+
+if (length(rules_down) > 0) {
+  rules_down_sorted <- sort(rules_down, by = "lift", decreasing = TRUE)
+  inspect(head(rules_down_sorted, 10))
+  plot(head(rules_down_sorted, 20), method = "graph") 
+}
+
+plot(head(rules_sorted, 20), method = "grouped")       # Grouping Bubble Charts
+plot(head(rules_long_sorted, 20), method = "paracoord") # parallel coordinate chart
+
+rules_df <- as(rules, "data.frame")
+rules_long_df <- as(rules_long, "data.frame")
+if (length(rules_down) > 0) {
+  rules_down_df <- as(rules_down, "data.frame")
+}
+```
+These two charts visualize crisis-period rule patterns. The grouped bubble plot shows most rules point to {HighVolatility} with low lift, indicating frequent but weakly informative co-movements. The parallel coordinates plot confirms this, with rule paths converging toward {HighVolatility}, highlighting the systemic and undifferentiated behavior of assets during crises.
+
+##Analyze specific rules in depth
+```{r}
+# lift > 1.2 & confidence > 0.6 
+strong_rules <- subset(rules, subset = lift > 1.2 & confidence > 0.6)
+
+# RHS: HighVolatility
+volatility_rules <- subset(rules, subset = rhs %in% "HighVolatility")
+
+inspect(head(strong_rules, 10))
+inspect(head(volatility_rules, 10))
+```
+During the COVID crisis period (March to June 2020), Apriori rule mining revealed that various trading states—such as Bitcoin rising or falling, and gold declining or remaining stable—were consistently associated with HighVolatility (confidence = 1.00). However, the lift values were close to 1, indicating that these associations were no stronger than random chance and lacked meaningful predictive power. Both Bitcoin and gold frequently appeared in rule antecedents, suggesting that rather than acting as volatility dampeners, they were actively moving with the market. As a result, the hypothesis that Bitcoin or gold served as safe-haven assets during crises is not supported. On the contrary, these assets appeared to behave as risk-synchronized instruments, contradicting traditional assumptions about gold’s stabilizing role and highlighting the systemic panic and asset interconnectedness during that period.
+
+###Step 6: Analyzing and Comparing Rules in Non-Crisis Times
+```{r}
+# Step 6.1: Extract Non-Crisis Data & Construct Transaction Sets
+normal_data <- subset(data, crisis_flag == "NonCrisis")
+
+# Construct basket list (one character vector per line → to list of character vectors)
+basket_normal <- normal_data %>%
+  select(btc_trend, btc_vol_group, btc_volatility_group, gold_trend) %>%
+  apply(1, function(x) as.character(na.omit(x))) %>%
+  lapply(as.vector)
+
+# Convert to transactions object
+txn_list_normal <- as(basket_normal, "transactions")
+
+summary(txn_list_normal)
+```
+
+```{r}
+# Step 6.2: Generate non-crisis period rules
+# Generate Apriori rules (non-crisis period)
+rules_normal <- apriori(txn_list_normal,
+                        parameter = list(supp = 0.05, conf = 0.6, minlen = 2))
+
+rules_normal_long <- apriori(txn_list_normal,
+                              parameter = list(supp = 0.04, conf = 0.6, minlen = 3))
+
+# Optional export to dataframe
+rules_normal_df <- as(rules_normal, "data.frame")
+rules_normal_long_df <- as(rules_normal_long, "data.frame")
+```
+During crisis periods, the relationships between indicators become denser and more systemic, with asset behaviors showing greater uniformity. In contrast, during non-crisis periods, asset behavior appears more dispersed or individualized.
+
+```{r}
+# Step 6.3: Sorting and Visualizing (non-crisis times)
+library(arulesViz)
+
+# Sort rules by lift
+rules_normal_sorted <- sort(rules_normal, by = "lift", decreasing = TRUE)
+rules_normal_long_sorted <- sort(rules_normal_long, by = "lift", decreasing = TRUE)
+
+# View the top 10 most elevated rules
+inspect(head(rules_normal_sorted, 10))
+inspect(head(rules_normal_long_sorted, 10))
+
+# Visualize the rule structure (take the first 20)
+plot(head(rules_normal_sorted, 20), method = "grouped")     
+plot(head(rules_normal_long_sorted, 20), method = "paracoord") 
+
+```
+The grouped bubble plot and parallel coordinates plot together highlight the structure of non-crisis rules. Most rules point toward LowVolatility or gold_Stable, with higher lift and clearer paths, especially when Bitcoin trends upward or volume is moderate. These visuals reinforce the idea that in stable markets, asset behaviors are more structured and predictive, offering stronger signals for volatility outcomes.
+The market structure is smoother and has some risk aversion characteristics.
+
+```{r}
+# Step 6.4: Non-crisis rule screening (e.g. lift > 1.2 and confidence > 0.6)
+strong_rules_normal <- subset(rules_normal, subset = lift > 1.2 & confidence > 0.6)
+
+# RHS: LowVolatility
+lowvol_rules <- subset(rules_normal, subset = rhs %in% "LowVolatility")
+
+inspect(head(strong_rules_normal, 10))
+inspect(head(lowvol_rules, 10))
+```
+During the crisis period, nearly all rules pointed toward HighVolatility with lift values close to 1, indicating weak predictive power. In contrast, the non-crisis period featured several rules pointing clearly to LowVolatility with lift values above 1.2, suggesting that market conditions were more predictable and stable. Additionally, the joint behaviors of Bitcoin and gold became more distinguishable, serving as meaningful signals of potential market calm.
+
+```{r}
+# Step 6.5: Summary Comparison of Rules – Crisis vs Non-Crisis Periods
+# Compare total number of rules
+cat("Number of rules generated during crisis period: ", length(rules), "\n")
+cat("Number of rules generated during non-crisis period: ", length(rules_normal), "\n")
+
+# Compare number of strong rules (lift > 1.2 and confidence > 0.6)
+cat("Number of strong rules during crisis period: ", length(subset(rules, lift > 1.2 & confidence > 0.6)), "\n")
+cat("Number of strong rules during non-crisis period: ", length(strong_rules_normal), "\n")
+
+# Frequent LHS items (antecedents) – extract itemMatrix to character and flatten
+cat("Top LHS items in crisis-period rules:\n")
+table(unlist(LIST(lhs(rules), decode = TRUE))) |> sort(decreasing = TRUE) |> head(5)
+
+cat("\nTop LHS items in non-crisis-period rules:\n")
+table(unlist(LIST(lhs(rules_normal), decode = TRUE))) |> sort(decreasing = TRUE) |> head(5)
+
+# Frequent RHS items (consequents) in non-crisis period
+table(unlist(LIST(rhs(rules_normal), decode = TRUE))) |> sort(decreasing = TRUE)
+```
+Rule strength was actually higher during stable periods, as market chaos during crises disrupted structural relationships between variables. In non-crisis periods, price trends were not the dominant factor; instead, trading volume and stability played a larger role in shaping behavior patterns. The market was also more likely to move toward stable conditions, especially when gold remained stable.
+
+##Prepare Data
+In this section, we first imported essential R packages for data processing, visualization, and time series analysis.
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tseries)
+library(forecast)
+
+data <- read.csv("/Users/song/Desktop/data_cleaned (2).csv")
+data$date <- as.Date(data$date)
+data <- data %>% arrange(date)
+
+data$crisis_flag <- ifelse(
+  data$date >= as.Date("2020-03-01") & data$date <= as.Date("2020-06-30"),
+  "Crisis", "NonCrisis"
+)
+```
+
+
+##Create time series objects
+
+We constructed time series objects for both Bitcoin and Gold prices using daily frequency data starting from 2016(Last 10 years). This conversion is necessary for time series analysis, as it enables us to apply modeling techniques like ARIMA.
+
+```{r}
+# Create time series objects
+btc_ts <- ts(data$btc_price, start = c(2016, 1), frequency = 365)
+gold_ts <- ts(data$gold_price, start = c(2016, 1), frequency = 365)
+
+#Visualize
+autoplot(btc_ts) +
+  ggtitle("Bitcoin Price Time Series") +
+  xlab("Time") + ylab("Price") +
+  theme_minimal()
+
+autoplot(gold_ts) +
+  ggtitle("Gold Price Time Series") +
+  xlab("Time") + ylab("Price") +
+  theme_minimal()
+
+```
+
+##ADS & KPSS
+
+Since the previous two sections reflect Bitcoin's shortcomings at the time of the crisis, in order to determine whether the ARIMA model can be used for Bitcoin price during the crisis period, we use two complementary smoothness tests for this time period: the ADF test and the KPSS test. We treated the series with log-transformed first-order differencing. The processed log-differenced series is smooth and suitable for ARIMA
+
+```{r}
+# Subset data for crisis and non-crisis periods
+btc_crisis <- data %>% filter(crisis_flag == "Crisis")
+btc_noncrisis <- data %>% filter(crisis_flag == "NonCrisis")
+
+# Convert to ts
+btc_crisis_ts <- ts(btc_crisis$btc_price, frequency = 365)
+btc_noncrisis_ts <- ts(btc_noncrisis$btc_price, frequency = 365)
+
+# Run stationarity tests
+adf.test(btc_crisis_ts)
+kpss.test(btc_crisis_ts)
+
+bitcoinadf <- adf.test(diff(log(btc_crisis_ts)))
+kpss.test(diff(log(btc_crisis_ts)))
+```
+
+# Conclusion
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(readr)
+
+# Load your cleaned dataset
+data <- read_csv("/Users/song/Desktop/data_cleaned (2).csv")
+
+# Define a sample crisis period (update dates as needed)
+crisis_data <- data %>%
+  filter(date >= as.Date("2020-03-01") & date <= as.Date("2020-12-31"))
+
+
+btc_stats <- crisis_data %>%
+  summarise(
+    Return = mean(btc_return, na.rm = TRUE),
+    Volatility = mean(btc_volatility, na.rm = TRUE),
+    Volume = mean(btc_volume, na.rm = TRUE)
+  )
+
+gold_stats <- crisis_data %>%
+  summarise(
+    Return = mean(gold_log_return, na.rm = TRUE),
+    Volatility = mean(rolling_vol, na.rm = TRUE),
+    Volume = mean(gold_price * 1000, na.rm = TRUE) # Estimated proxy for gold trading volume
+  )
+
+
+
+
+# Simple 50/50 portfolio
+portfolio_return <- 0.5 * btc_stats$Return + 0.5 * gold_stats$Return
+portfolio_vol <- 0.5 * btc_stats$Volatility + 0.5 * gold_stats$Volatility  # Simplified
+
+portfolio_data <- data.frame(
+  Portfolio = c("Gold Only", "Bitcoin Only", "50/50 Portfolio"),
+  Return = c(gold_stats$Return, btc_stats$Return, portfolio_return),
+  Risk = c(gold_stats$Volatility, btc_stats$Volatility, portfolio_vol)
+)
+
+ggplot(portfolio_data, aes(x = Risk, y = Return, label = Portfolio)) +
+  geom_point(size = 5, color = "steelblue") +
+  geom_text(nudge_y = 0.0015) +
+  labs(title = "Portfolio Risk vs. Return (Crisis 2020)",
+       x = "Standard Deviation (Risk)",
+       y = "Average Return") +
+  theme_minimal(base_size = 14)
+
+```
+

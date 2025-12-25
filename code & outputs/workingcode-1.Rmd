@@ -1,0 +1,159 @@
+---
+title: "Untitled"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-04-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+Btgold<-read.csv("~/Desktop/data_cleaned.csv")
+```
+
+1. Data loading and pre-processing
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(car)    
+library(factoextra) 
+library(ggfortify) 
+
+
+data<-Btgold %>%
+  mutate(
+    date = as.Date(date),
+    btc_return = c(NA, diff(btc_price) / lag(btc_price)[-1]), # Calculate the rate of return
+    gold_return = c(NA, diff(gold_price) / lag(gold_price)[-1]),
+    is_crisis = ifelse(date >= as.Date("2020-01-01") & date <= as.Date("2020-06-30"), 1, 0) # Calculate the rate of return to define the crisis period
+  ) %>%
+  drop_na() # Remove missing values
+```
+
+2.1 T-test or Mann-Whitney test (difference in returns)
+```{r}
+# 正态性检验（Shapiro-Wilk）
+shapiro.test(data$btc_return[data$is_crisis == 1]) # Crisis period BTC
+shapiro.test(data$gold_return[data$is_crisis == 1]) # Crisis period Gold
+```
+
+The non-normality test assumes that returns do not follow a normal distribution, so the following can only be done using a non-parametric rank test (Wilcoxon rank sum test, also known as the Mann-Whitney U test) to compare the median distribution of daily returns in the “Crisis Period” with that in the “Non-Crisis Period”. The median distribution of daily returns under “crisis period” and “non-crisis period” are compared to the median distribution of daily returns under “crisis period” and “non-crisis period”.
+**The p's for both are much larger than the commonly used significance level (e.g., 0.05), so we are unable to reject the statement that “the median return is the same in crisis and non-crisis periods” (the null hypothesis) **
+
+```{r}
+# BTC Yield Test
+wilcox.test(btc_return ~ is_crisis, data = data)  # BTC
+# Gold Yield Test
+wilcox.test(gold_return ~ is_crisis, data = data) # Gold
+```
+
+The BTC Yield Test Levene's Test, which tests whether the variance of two samples (in this case “crisis” vs “non-crisis”) is equal, i.e. whether there is a difference in the “stability” of bitcoin volatility between different time periods. The “stability” of bitcoin's volatility over time.
+
+```{r}
+leveneTest(btc_volatility ~ as.factor(is_crisis), data = data)
+```
+
+Since p≈0.00006<0.001, we reject the null hypothesis, indicating that there is a significant difference in the variance of daily volatility of Bitcoin during crisis and non-crisis periods. This implies that volatility is higher (higher variance) during crisis periods, while it is relatively smooth during non-crisis periods.
+
+```{r}
+# Visualization of price trends during COVID-19
+ggplot(data, aes(x = date)) +
+  geom_line(aes(y = btc_price, color = "BTC"), linewidth = 1) +
+  geom_line(aes(y = gold_price * 100, color = "Gold (Scaled)"), linewidth = 1) + 
+  geom_rect(aes(xmin = as.Date("2020-01-01"), xmax = as.Date("2020-06-30")),
+    ymin = -Inf, ymax = Inf,fill = "red",, alpha = 0.2) +
+  scale_color_manual(values = c("BTC" = "orange", "Gold (Scaled)" = "gold")) +
+  labs(title = "BTC vs Gold During COVID-19 Crisis", x = "Date", y = "Price") +
+  theme_minimal()
+```
+
+
+
+
+```{r}
+# Select and standardize features
+features <- data %>%
+  select(btc_return, btc_volatility, btc_volume, gold_return,rolling_vol) %>%
+  scale() # standardization
+
+# Determining the optimal number of clusters (elbow rule)
+fviz_nbclust(features, kmeans, method = "wss") + 
+  geom_vline(xintercept = 3, linetype = 2) # Suggested choice of inflection point (e.g., k = 2 or 3)
+set.seed(42)
+kmeans_result <- kmeans(features, centers = 2) # assuming k=2
+data$cluster <- as.factor(kmeans_result$cluster)
+```
+```{r}
+pca_result <- prcomp(features, scale. = TRUE)
+autoplot(pca_result, data = data, colour = 'cluster', 
+         loadings = TRUE, loadings.label = TRUE, frame = TRUE) +
+  labs(title = "PCA Visualization of BTC vs Gold Clusters")
+```
+The characteristics of return are completely different from the characteristics of volatility, displayed in different principal component dimensions, where the first principal component is mainly composed of volatility, volume also mainly reflects the first principal component; the second principal component is mainly composed of return
+ 
+
+```{r}
+pca_result$rotation
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
